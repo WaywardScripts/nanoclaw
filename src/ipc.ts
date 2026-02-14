@@ -377,7 +377,538 @@ export async function processTaskIpc(
       }
       break;
 
+    case 'send_gmail':
+      await processSendGmail(data as any, sourceGroup);
+      break;
+
+    case 'list_calendar_events':
+      await processListCalendarEvents(data as any, sourceGroup);
+      break;
+
+    case 'get_calendar_event':
+      await processGetCalendarEvent(data as any, sourceGroup);
+      break;
+
+    case 'create_calendar_event':
+      await processCreateCalendarEvent(data as any, sourceGroup);
+      break;
+
+    case 'update_calendar_event':
+      await processUpdateCalendarEvent(data as any, sourceGroup);
+      break;
+
+    case 'delete_calendar_event':
+      await processDeleteCalendarEvent(data as any, sourceGroup);
+      break;
+
     default:
       logger.warn({ type: data.type }, 'Unknown IPC task type');
+  }
+}
+
+async function processSendGmail(
+  data: {
+    to?: string[];
+    subject?: string;
+    body?: string;
+    cc?: string[];
+    bcc?: string[];
+    html?: boolean;
+  },
+  sourceGroup: string,
+): Promise<void> {
+  try {
+    const { google } = await import('googleapis');
+    const { homedir } = await import('os');
+
+    const tokenPath = path.join(homedir(), '.gmail-mcp', 'googleapis-tokens.json');
+    const credentialsPath = path.join(homedir(), '.gmail-mcp', 'gcp-oauth.keys.json');
+
+    if (!fs.existsSync(tokenPath) || !fs.existsSync(credentialsPath)) {
+      logger.error(
+        { sourceGroup },
+        'Gmail OAuth not configured. Run: node /workspace/project/scripts/gmail-oauth-setup.js',
+      );
+      return;
+    }
+
+    // Load credentials and tokens
+    const credentials = JSON.parse(fs.readFileSync(credentialsPath, 'utf-8'));
+    const tokens = JSON.parse(fs.readFileSync(tokenPath, 'utf-8'));
+
+    const creds = credentials.installed || credentials.web;
+    const { client_id, client_secret, redirect_uris } = creds;
+    const redirectUri = redirect_uris?.[0] || 'urn:ietf:wg:oauth:2.0:oob';
+
+    // Create OAuth2 client
+    const oAuth2Client = new google.auth.OAuth2(
+      client_id,
+      client_secret,
+      redirectUri,
+    );
+    oAuth2Client.setCredentials(tokens);
+
+    // Create Gmail client
+    const gmail = google.gmail({ version: 'v1', auth: oAuth2Client });
+
+    // Build email
+    const to = data.to || [];
+    const cc = data.cc || [];
+    const bcc = data.bcc || [];
+    const subject = data.subject || '';
+    const body = data.body || '';
+    const isHtml = data.html || false;
+
+    const messageParts = [
+      `To: ${to.join(', ')}`,
+      cc.length > 0 ? `Cc: ${cc.join(', ')}` : '',
+      bcc.length > 0 ? `Bcc: ${bcc.join(', ')}` : '',
+      `Subject: ${subject}`,
+      `Content-Type: ${isHtml ? 'text/html' : 'text/plain'}; charset=utf-8`,
+      '',
+      body,
+    ];
+
+    const message = messageParts.filter(Boolean).join('\n');
+    const encodedMessage = Buffer.from(message)
+      .toString('base64')
+      .replace(/\+/g, '-')
+      .replace(/\//g, '_')
+      .replace(/=+$/, '');
+
+    // Send email
+    await gmail.users.messages.send({
+      userId: 'me',
+      requestBody: {
+        raw: encodedMessage,
+      },
+    });
+
+    logger.info(
+      { sourceGroup, to: to.join(', '), subject },
+      'Gmail email sent successfully',
+    );
+  } catch (err) {
+    logger.error(
+      { sourceGroup, err },
+      'Failed to send Gmail email',
+    );
+  }
+}
+
+async function processListCalendarEvents(
+  data: {
+    time_min?: string;
+    time_max?: string;
+    max_results?: number;
+    calendar_id?: string;
+    timezone?: string;
+  },
+  sourceGroup: string,
+): Promise<void> {
+  try {
+    const { google } = await import('googleapis');
+    const { homedir } = await import('os');
+
+    const tokenPath = path.join(homedir(), '.gmail-mcp', 'googleapis-tokens.json');
+    const credentialsPath = path.join(homedir(), '.gmail-mcp', 'gcp-oauth.keys.json');
+
+    if (!fs.existsSync(tokenPath) || !fs.existsSync(credentialsPath)) {
+      logger.error(
+        { sourceGroup },
+        'Google Calendar OAuth not configured. Run: node /workspace/project/scripts/gmail-oauth-setup.js',
+      );
+      return;
+    }
+
+    // Load credentials and tokens
+    const credentials = JSON.parse(fs.readFileSync(credentialsPath, 'utf-8'));
+    const tokens = JSON.parse(fs.readFileSync(tokenPath, 'utf-8'));
+
+    const creds = credentials.installed || credentials.web;
+    const { client_id, client_secret, redirect_uris } = creds;
+    const redirectUri = redirect_uris?.[0] || 'urn:ietf:wg:oauth:2.0:oob';
+
+    // Create OAuth2 client
+    const oAuth2Client = new google.auth.OAuth2(
+      client_id,
+      client_secret,
+      redirectUri,
+    );
+    oAuth2Client.setCredentials(tokens);
+
+    // Create Calendar client
+    const calendar = google.calendar({ version: 'v3', auth: oAuth2Client });
+
+    // Set default time range (next 7 days)
+    const timeMin = data.time_min || new Date().toISOString();
+    const timeMax = data.time_max || new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString();
+
+    // List events
+    const response = await calendar.events.list({
+      calendarId: data.calendar_id || 'primary',
+      timeMin,
+      timeMax,
+      maxResults: Math.min(data.max_results || 10, 250),
+      singleEvents: true,
+      orderBy: 'startTime',
+      timeZone: data.timezone || TIMEZONE,
+    });
+
+    const events = response.data.items || [];
+    logger.info(
+      { sourceGroup, count: events.length, calendarId: data.calendar_id },
+      'Calendar events listed successfully',
+    );
+  } catch (err) {
+    logger.error(
+      { sourceGroup, err },
+      'Failed to list calendar events',
+    );
+  }
+}
+
+async function processGetCalendarEvent(
+  data: {
+    event_id?: string;
+    calendar_id?: string;
+    timezone?: string;
+  },
+  sourceGroup: string,
+): Promise<void> {
+  try {
+    const { google } = await import('googleapis');
+    const { homedir } = await import('os');
+
+    const tokenPath = path.join(homedir(), '.gmail-mcp', 'googleapis-tokens.json');
+    const credentialsPath = path.join(homedir(), '.gmail-mcp', 'gcp-oauth.keys.json');
+
+    if (!fs.existsSync(tokenPath) || !fs.existsSync(credentialsPath)) {
+      logger.error(
+        { sourceGroup },
+        'Google Calendar OAuth not configured. Run: node /workspace/project/scripts/gmail-oauth-setup.js',
+      );
+      return;
+    }
+
+    if (!data.event_id) {
+      logger.error({ sourceGroup }, 'Missing event_id for get_calendar_event');
+      return;
+    }
+
+    // Load credentials and tokens
+    const credentials = JSON.parse(fs.readFileSync(credentialsPath, 'utf-8'));
+    const tokens = JSON.parse(fs.readFileSync(tokenPath, 'utf-8'));
+
+    const creds = credentials.installed || credentials.web;
+    const { client_id, client_secret, redirect_uris } = creds;
+    const redirectUri = redirect_uris?.[0] || 'urn:ietf:wg:oauth:2.0:oob';
+
+    // Create OAuth2 client
+    const oAuth2Client = new google.auth.OAuth2(
+      client_id,
+      client_secret,
+      redirectUri,
+    );
+    oAuth2Client.setCredentials(tokens);
+
+    // Create Calendar client
+    const calendar = google.calendar({ version: 'v3', auth: oAuth2Client });
+
+    // Get event
+    const response = await calendar.events.get({
+      calendarId: data.calendar_id || 'primary',
+      eventId: data.event_id,
+      timeZone: data.timezone || TIMEZONE,
+    });
+
+    logger.info(
+      { sourceGroup, eventId: data.event_id },
+      'Calendar event retrieved successfully',
+    );
+  } catch (err) {
+    logger.error(
+      { sourceGroup, eventId: data.event_id, err },
+      'Failed to get calendar event',
+    );
+  }
+}
+
+async function processCreateCalendarEvent(
+  data: {
+    summary?: string;
+    start?: string;
+    end?: string;
+    description?: string;
+    location?: string;
+    attendees?: string[];
+    calendar_id?: string;
+    timezone?: string;
+    send_notifications?: boolean;
+  },
+  sourceGroup: string,
+): Promise<void> {
+  try {
+    const { google } = await import('googleapis');
+    const { homedir } = await import('os');
+
+    const tokenPath = path.join(homedir(), '.gmail-mcp', 'googleapis-tokens.json');
+    const credentialsPath = path.join(homedir(), '.gmail-mcp', 'gcp-oauth.keys.json');
+
+    if (!fs.existsSync(tokenPath) || !fs.existsSync(credentialsPath)) {
+      logger.error(
+        { sourceGroup },
+        'Google Calendar OAuth not configured. Run: node /workspace/project/scripts/gmail-oauth-setup.js',
+      );
+      return;
+    }
+
+    if (!data.summary || !data.start || !data.end) {
+      logger.error(
+        { sourceGroup },
+        'Missing required fields for create_calendar_event: summary, start, end',
+      );
+      return;
+    }
+
+    // Load credentials and tokens
+    const credentials = JSON.parse(fs.readFileSync(credentialsPath, 'utf-8'));
+    const tokens = JSON.parse(fs.readFileSync(tokenPath, 'utf-8'));
+
+    const creds = credentials.installed || credentials.web;
+    const { client_id, client_secret, redirect_uris } = creds;
+    const redirectUri = redirect_uris?.[0] || 'urn:ietf:wg:oauth:2.0:oob';
+
+    // Create OAuth2 client
+    const oAuth2Client = new google.auth.OAuth2(
+      client_id,
+      client_secret,
+      redirectUri,
+    );
+    oAuth2Client.setCredentials(tokens);
+
+    // Create Calendar client
+    const calendar = google.calendar({ version: 'v3', auth: oAuth2Client });
+
+    // Determine if this is an all-day event (date format without time)
+    const isAllDay = !data.start.includes('T');
+
+    const event: any = {
+      summary: data.summary,
+      start: isAllDay
+        ? { date: data.start, timeZone: data.timezone || TIMEZONE }
+        : { dateTime: data.start, timeZone: data.timezone || TIMEZONE },
+      end: isAllDay
+        ? { date: data.end, timeZone: data.timezone || TIMEZONE }
+        : { dateTime: data.end, timeZone: data.timezone || TIMEZONE },
+    };
+
+    if (data.description) {
+      event.description = data.description;
+    }
+
+    if (data.location) {
+      event.location = data.location;
+    }
+
+    if (data.attendees && data.attendees.length > 0) {
+      event.attendees = data.attendees.map((email) => ({ email }));
+    }
+
+    // Create event
+    const response = await calendar.events.insert({
+      calendarId: data.calendar_id || 'primary',
+      requestBody: event,
+      sendUpdates: data.send_notifications ? 'all' : 'none',
+    });
+
+    logger.info(
+      { sourceGroup, eventId: response.data.id, summary: data.summary },
+      'Calendar event created successfully',
+    );
+  } catch (err) {
+    logger.error(
+      { sourceGroup, summary: data.summary, err },
+      'Failed to create calendar event',
+    );
+  }
+}
+
+async function processUpdateCalendarEvent(
+  data: {
+    event_id?: string;
+    summary?: string;
+    start?: string;
+    end?: string;
+    description?: string;
+    location?: string;
+    attendees?: string[];
+    calendar_id?: string;
+    timezone?: string;
+    send_notifications?: boolean;
+  },
+  sourceGroup: string,
+): Promise<void> {
+  try {
+    const { google } = await import('googleapis');
+    const { homedir } = await import('os');
+
+    const tokenPath = path.join(homedir(), '.gmail-mcp', 'googleapis-tokens.json');
+    const credentialsPath = path.join(homedir(), '.gmail-mcp', 'gcp-oauth.keys.json');
+
+    if (!fs.existsSync(tokenPath) || !fs.existsSync(credentialsPath)) {
+      logger.error(
+        { sourceGroup },
+        'Google Calendar OAuth not configured. Run: node /workspace/project/scripts/gmail-oauth-setup.js',
+      );
+      return;
+    }
+
+    if (!data.event_id) {
+      logger.error({ sourceGroup }, 'Missing event_id for update_calendar_event');
+      return;
+    }
+
+    // Load credentials and tokens
+    const credentials = JSON.parse(fs.readFileSync(credentialsPath, 'utf-8'));
+    const tokens = JSON.parse(fs.readFileSync(tokenPath, 'utf-8'));
+
+    const creds = credentials.installed || credentials.web;
+    const { client_id, client_secret, redirect_uris } = creds;
+    const redirectUri = redirect_uris?.[0] || 'urn:ietf:wg:oauth:2.0:oob';
+
+    // Create OAuth2 client
+    const oAuth2Client = new google.auth.OAuth2(
+      client_id,
+      client_secret,
+      redirectUri,
+    );
+    oAuth2Client.setCredentials(tokens);
+
+    // Create Calendar client
+    const calendar = google.calendar({ version: 'v3', auth: oAuth2Client });
+
+    // Get existing event first
+    const existingEvent = await calendar.events.get({
+      calendarId: data.calendar_id || 'primary',
+      eventId: data.event_id,
+    });
+
+    const event: any = { ...existingEvent.data };
+
+    // Update only provided fields
+    if (data.summary !== undefined) {
+      event.summary = data.summary;
+    }
+
+    if (data.start !== undefined) {
+      const isAllDay = !data.start.includes('T');
+      event.start = isAllDay
+        ? { date: data.start, timeZone: data.timezone || TIMEZONE }
+        : { dateTime: data.start, timeZone: data.timezone || TIMEZONE };
+    }
+
+    if (data.end !== undefined) {
+      const isAllDay = !data.end.includes('T');
+      event.end = isAllDay
+        ? { date: data.end, timeZone: data.timezone || TIMEZONE }
+        : { dateTime: data.end, timeZone: data.timezone || TIMEZONE };
+    }
+
+    if (data.description !== undefined) {
+      event.description = data.description;
+    }
+
+    if (data.location !== undefined) {
+      event.location = data.location;
+    }
+
+    if (data.attendees !== undefined) {
+      event.attendees = data.attendees.map((email) => ({ email }));
+    }
+
+    // Update event
+    await calendar.events.update({
+      calendarId: data.calendar_id || 'primary',
+      eventId: data.event_id,
+      requestBody: event,
+      sendUpdates: data.send_notifications ? 'all' : 'none',
+    });
+
+    logger.info(
+      { sourceGroup, eventId: data.event_id },
+      'Calendar event updated successfully',
+    );
+  } catch (err) {
+    logger.error(
+      { sourceGroup, eventId: data.event_id, err },
+      'Failed to update calendar event',
+    );
+  }
+}
+
+async function processDeleteCalendarEvent(
+  data: {
+    event_id?: string;
+    calendar_id?: string;
+    send_notifications?: boolean;
+  },
+  sourceGroup: string,
+): Promise<void> {
+  try {
+    const { google } = await import('googleapis');
+    const { homedir } = await import('os');
+
+    const tokenPath = path.join(homedir(), '.gmail-mcp', 'googleapis-tokens.json');
+    const credentialsPath = path.join(homedir(), '.gmail-mcp', 'gcp-oauth.keys.json');
+
+    if (!fs.existsSync(tokenPath) || !fs.existsSync(credentialsPath)) {
+      logger.error(
+        { sourceGroup },
+        'Google Calendar OAuth not configured. Run: node /workspace/project/scripts/gmail-oauth-setup.js',
+      );
+      return;
+    }
+
+    if (!data.event_id) {
+      logger.error({ sourceGroup }, 'Missing event_id for delete_calendar_event');
+      return;
+    }
+
+    // Load credentials and tokens
+    const credentials = JSON.parse(fs.readFileSync(credentialsPath, 'utf-8'));
+    const tokens = JSON.parse(fs.readFileSync(tokenPath, 'utf-8'));
+
+    const creds = credentials.installed || credentials.web;
+    const { client_id, client_secret, redirect_uris } = creds;
+    const redirectUri = redirect_uris?.[0] || 'urn:ietf:wg:oauth:2.0:oob';
+
+    // Create OAuth2 client
+    const oAuth2Client = new google.auth.OAuth2(
+      client_id,
+      client_secret,
+      redirectUri,
+    );
+    oAuth2Client.setCredentials(tokens);
+
+    // Create Calendar client
+    const calendar = google.calendar({ version: 'v3', auth: oAuth2Client });
+
+    // Delete event
+    await calendar.events.delete({
+      calendarId: data.calendar_id || 'primary',
+      eventId: data.event_id,
+      sendUpdates: data.send_notifications ? 'all' : 'none',
+    });
+
+    logger.info(
+      { sourceGroup, eventId: data.event_id },
+      'Calendar event deleted successfully',
+    );
+  } catch (err) {
+    logger.error(
+      { sourceGroup, eventId: data.event_id, err },
+      'Failed to delete calendar event',
+    );
   }
 }

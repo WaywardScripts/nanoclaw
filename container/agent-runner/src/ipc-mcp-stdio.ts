@@ -274,6 +274,201 @@ Use available_groups.json to find the JID for a group. The folder name should be
   },
 );
 
+server.tool(
+  'send_gmail',
+  `Send an email via Gmail using the googleapis library. Requires OAuth tokens to be set up via gmail-oauth-setup.js script.
+
+The email will be sent from the authenticated Gmail account.`,
+  {
+    to: z.array(z.string()).describe('List of recipient email addresses'),
+    subject: z.string().describe('Email subject'),
+    body: z.string().describe('Email body (plain text or HTML)'),
+    cc: z.array(z.string()).optional().describe('List of CC recipients'),
+    bcc: z.array(z.string()).optional().describe('List of BCC recipients'),
+    html: z.boolean().optional().describe('Set to true if body contains HTML'),
+  },
+  async (args) => {
+    const data = {
+      type: 'send_gmail',
+      to: args.to,
+      subject: args.subject,
+      body: args.body,
+      cc: args.cc || [],
+      bcc: args.bcc || [],
+      html: args.html || false,
+      timestamp: new Date().toISOString(),
+    };
+
+    writeIpcFile(TASKS_DIR, data);
+
+    return {
+      content: [{ type: 'text' as const, text: `Email queued for sending to: ${args.to.join(', ')}` }],
+    };
+  },
+);
+
+server.tool(
+  'list_calendar_events',
+  `List upcoming calendar events from Google Calendar. Requires OAuth tokens to be set up via gmail-oauth-setup.js script.
+
+Returns events within the specified date range (defaults to next 7 days).`,
+  {
+    time_min: z.string().optional().describe('Start time for events (ISO 8601 format, e.g., "2026-02-13T00:00:00Z"). Defaults to now.'),
+    time_max: z.string().optional().describe('End time for events (ISO 8601 format, e.g., "2026-02-20T23:59:59Z"). Defaults to 7 days from now.'),
+    max_results: z.number().optional().describe('Maximum number of events to return (default: 10, max: 250)'),
+    calendar_id: z.string().optional().describe('Calendar ID (default: "primary")'),
+    timezone: z.string().optional().describe('Timezone for results (e.g., "America/New_York"). Defaults to local timezone.'),
+  },
+  async (args) => {
+    const data = {
+      type: 'list_calendar_events',
+      time_min: args.time_min,
+      time_max: args.time_max,
+      max_results: args.max_results || 10,
+      calendar_id: args.calendar_id || 'primary',
+      timezone: args.timezone,
+      timestamp: new Date().toISOString(),
+    };
+
+    writeIpcFile(TASKS_DIR, data);
+
+    return {
+      content: [{ type: 'text' as const, text: 'Calendar events list requested. Waiting for response...' }],
+    };
+  },
+);
+
+server.tool(
+  'get_calendar_event',
+  `Get details of a specific Google Calendar event.`,
+  {
+    event_id: z.string().describe('The event ID to retrieve'),
+    calendar_id: z.string().optional().describe('Calendar ID (default: "primary")'),
+    timezone: z.string().optional().describe('Timezone for results (e.g., "America/New_York"). Defaults to local timezone.'),
+  },
+  async (args) => {
+    const data = {
+      type: 'get_calendar_event',
+      event_id: args.event_id,
+      calendar_id: args.calendar_id || 'primary',
+      timezone: args.timezone,
+      timestamp: new Date().toISOString(),
+    };
+
+    writeIpcFile(TASKS_DIR, data);
+
+    return {
+      content: [{ type: 'text' as const, text: `Event details requested for: ${args.event_id}` }],
+    };
+  },
+);
+
+server.tool(
+  'create_calendar_event',
+  `Create a new Google Calendar event.
+
+Times should be in ISO 8601 format (e.g., "2026-02-13T14:00:00-05:00" or "2026-02-13T14:00:00Z").
+For all-day events, use dates without time (e.g., "2026-02-13").`,
+  {
+    summary: z.string().describe('Event title/summary'),
+    start: z.string().describe('Start time (ISO 8601 format or date for all-day events)'),
+    end: z.string().describe('End time (ISO 8601 format or date for all-day events)'),
+    description: z.string().optional().describe('Event description'),
+    location: z.string().optional().describe('Event location'),
+    attendees: z.array(z.string()).optional().describe('List of attendee email addresses'),
+    calendar_id: z.string().optional().describe('Calendar ID (default: "primary")'),
+    timezone: z.string().optional().describe('Timezone for event times (e.g., "America/New_York"). Defaults to local timezone.'),
+    send_notifications: z.boolean().optional().describe('Send email notifications to attendees (default: false)'),
+  },
+  async (args) => {
+    const data = {
+      type: 'create_calendar_event',
+      summary: args.summary,
+      start: args.start,
+      end: args.end,
+      description: args.description,
+      location: args.location,
+      attendees: args.attendees || [],
+      calendar_id: args.calendar_id || 'primary',
+      timezone: args.timezone,
+      send_notifications: args.send_notifications || false,
+      timestamp: new Date().toISOString(),
+    };
+
+    writeIpcFile(TASKS_DIR, data);
+
+    return {
+      content: [{ type: 'text' as const, text: `Calendar event creation requested: "${args.summary}"` }],
+    };
+  },
+);
+
+server.tool(
+  'update_calendar_event',
+  `Update an existing Google Calendar event.
+
+Only provide fields that should be updated. Omitted fields will remain unchanged.`,
+  {
+    event_id: z.string().describe('The event ID to update'),
+    summary: z.string().optional().describe('New event title/summary'),
+    start: z.string().optional().describe('New start time (ISO 8601 format or date for all-day events)'),
+    end: z.string().optional().describe('New end time (ISO 8601 format or date for all-day events)'),
+    description: z.string().optional().describe('New event description'),
+    location: z.string().optional().describe('New event location'),
+    attendees: z.array(z.string()).optional().describe('New list of attendee email addresses'),
+    calendar_id: z.string().optional().describe('Calendar ID (default: "primary")'),
+    timezone: z.string().optional().describe('Timezone for event times (e.g., "America/New_York")'),
+    send_notifications: z.boolean().optional().describe('Send email notifications to attendees (default: false)'),
+  },
+  async (args) => {
+    const data = {
+      type: 'update_calendar_event',
+      event_id: args.event_id,
+      summary: args.summary,
+      start: args.start,
+      end: args.end,
+      description: args.description,
+      location: args.location,
+      attendees: args.attendees,
+      calendar_id: args.calendar_id || 'primary',
+      timezone: args.timezone,
+      send_notifications: args.send_notifications || false,
+      timestamp: new Date().toISOString(),
+    };
+
+    writeIpcFile(TASKS_DIR, data);
+
+    return {
+      content: [{ type: 'text' as const, text: `Calendar event update requested for: ${args.event_id}` }],
+    };
+  },
+);
+
+server.tool(
+  'delete_calendar_event',
+  `Delete a Google Calendar event.`,
+  {
+    event_id: z.string().describe('The event ID to delete'),
+    calendar_id: z.string().optional().describe('Calendar ID (default: "primary")'),
+    send_notifications: z.boolean().optional().describe('Send email notifications to attendees (default: false)'),
+  },
+  async (args) => {
+    const data = {
+      type: 'delete_calendar_event',
+      event_id: args.event_id,
+      calendar_id: args.calendar_id || 'primary',
+      send_notifications: args.send_notifications || false,
+      timestamp: new Date().toISOString(),
+    };
+
+    writeIpcFile(TASKS_DIR, data);
+
+    return {
+      content: [{ type: 'text' as const, text: `Calendar event deletion requested for: ${args.event_id}` }],
+    };
+  },
+);
+
 // Start the stdio transport
 const transport = new StdioServerTransport();
 await server.connect(transport);

@@ -1,0 +1,13 @@
+{
+  "provider": "openai",
+  "openai": {
+    "apiKey": "",
+    "model": "whisper-1"
+  },
+  "groq": {
+    "apiKey": "",
+    "model": "whisper-large-v3"
+  },
+  "enabled": false,
+  "fallbackMessage": "[Voice Message - transcription unavailable]"
+}

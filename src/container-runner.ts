@@ -2,7 +2,7 @@
  * Container Runner for NanoClaw
  * Spawns agent execution in Apple Container and handles IPC
  */
-import { ChildProcess, exec, spawn } from 'child_process';
+import { ChildProcess, exec, execSync, spawn } from 'child_process';
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
@@ -145,6 +145,16 @@ function buildVolumeMounts(
     readonly: false,
   });
 
+  // Gmail credentials directory
+  const gmailDir = path.join(homeDir, '.gmail-mcp');
+  if (fs.existsSync(gmailDir)) {
+    mounts.push({
+      hostPath: gmailDir,
+      containerPath: '/home/node/.gmail-mcp',
+      readonly: false  // MCP may need to refresh tokens
+    });
+  }
+
   // Per-group IPC namespace: each group gets its own IPC directory
   // This prevents cross-group privilege escalation via IPC
   const groupIpcDir = path.join(DATA_DIR, 'ipc', group.folder);
@@ -269,7 +279,16 @@ export async function runContainerAgent(
   fs.mkdirSync(logsDir, { recursive: true });
 
   return new Promise((resolve) => {
-    const container = spawn('container', containerArgs, {
+    // Auto-detect container runtime (Docker or Apple Container)
+    let containerCommand = 'container';
+    try {
+      execSync('docker info', { stdio: 'pipe' });
+      containerCommand = 'docker';
+    } catch {
+      // Docker not available, fallback to Apple Container
+    }
+
+    const container = spawn(containerCommand, containerArgs, {
       stdio: ['pipe', 'pipe', 'pipe'],
     });
 

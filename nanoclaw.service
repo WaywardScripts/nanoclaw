@@ -1,0 +1,17 @@
+[Unit]
+Description=NanoClaw Personal Assistant
+After=network.target docker.service
+Requires=docker.service
+
+[Service]
+Type=simple
+User=flucas
+WorkingDirectory=/home/flucas/nanoclaw
+ExecStart=/usr/bin/node /home/flucas/nanoclaw/dist/index.js
+Restart=always
+RestartSec=10
+StandardOutput=append:/home/flucas/nanoclaw/logs/nanoclaw.log
+StandardError=append:/home/flucas/nanoclaw/logs/nanoclaw.error.log
+
+[Install]
+WantedBy=multi-user.target
